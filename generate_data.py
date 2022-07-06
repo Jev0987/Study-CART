@@ -149,5 +149,4 @@ def get_data():
         test_dict[key] = test_list_group
         valid_dict[key] = valid_list_group
         train_dict[key] = train_list_group
-
     return train_dict,valid_dict,test_dict
