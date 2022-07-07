@@ -32,9 +32,9 @@ def get_data():
     #根据不同的列标签创建字典
     #{'user_list': [], 'item_list': [], 'L1_category_list': [], 'L2_category_list': [], 'cluster_list': [], 'type_list': [], 'location_list': [], 'star_list': [], 'time_list': []}
     count_dict = dict()
-    count_dict['user_list'] = []
-    count_dict['item_list'] = []
-    count_dict['L1_category_list'] = []
+    count_dict['user_list'] = [] #用户id
+    count_dict['item_list'] = [] #同一块区域id
+    count_dict['L1_category_list'] = [] #
     count_dict['L2_category_list'] = []
     count_dict['cluster_list'] = []
     count_dict['type_list'] = []

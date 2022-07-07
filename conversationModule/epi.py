@@ -10,8 +10,9 @@ from torch.autograd import Variable
 
 def auxiliary_reward():
     """
-
-    :return: 额外reward字典，表示每个poi通过相应的操作后应该有的reward值
+    mp/Ml
+    偏好属性p的poi数目/所有individual poi数目
+    :return: 额外reward字典
     """
     import pandas as pd
     auxiliary_reward_dict = dict()
@@ -105,3 +106,48 @@ def run_one_episode(transE_model, user_id, busi_id, MAX_TURN, do_random, write_f
     data = dict()
     data['facet'] = start_facet
     start_signal = message(cfg.AGENT, cfg.USER, cfg.EPISODE_START, data)
+
+    agent_utterance = None
+    while(the_agent.turn_count < MAX_TURN):
+        if the_agent.turn_count == 0:
+            user_utterance = the_user.response(start_signal) #user responses start_signal
+        else:
+            user_utterance = the_user.response(agent_utterance)
+        with open(write_fp, 'a') as f:
+            f.write('The user {} utterance in #{} turn, type: {}, data: {}\n'.format(user_id, the_agent.turn_count, user_utterance.message_type, user_utterance.data))
+
+        #推荐成功
+        if user_utterance.message_type == cfg.ACCEPT_REC:
+            success = True
+            the_agent.history_list.append(2) #success recommend get reward 2， look for auxiliary_reward
+            rewards = get_reward(the_agent.history_list, gamma, trick)
+            if cfg.purpose == 'pretrain':
+                return numpy_list
+            else:
+                return (the_agent.log_prob_list, rewards, success, int(the_agent.turn_count), the_agent.known_feature_category)
+
+        agent_utterance = the_agent.response(user_utterance)
+
+        the_agent.turn_count += 1
+
+        if the_agent.turn_count == MAX_TURN:
+            success = False
+            the_agent.history_list.append(-2)  # failed recommend get reward -2
+            print('Max turn quit...')
+            rewards = get_reward(the_agent.history_list, gamma, trick)
+            if cfg.purpose == 'pretrain':
+                return numpy_list
+            else:
+                return (
+                the_agent.log_prob_list, rewards, success, int(the_agent.turn_count), the_agent.known_feature_category)
+
+def update_PN_model(model, log_prob_list, rewards, optimizer):
+    model.train()
+
+    loss = torch.sum(torch.mul(log_prob_list, Variable(rewards)).mul(-1))
+
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+

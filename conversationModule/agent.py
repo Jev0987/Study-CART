@@ -12,6 +12,7 @@ from collections import defaultdict
 from config import global_config as cfg
 import random
 
+from util_entropy import cal_ent
 from util_fea_sim import feature_distance
 from util_sense import rank_items
 
@@ -209,7 +210,7 @@ class agent():
 
     def update_upon_featue_inform(self, input_message):
         """
-
+        根据feature选择ask形式
         :param input_message:
         """
         assert input_message.message_type == cfg.INFORM_FACET
@@ -241,7 +242,7 @@ class agent():
 
                 self.known_feature = list(set(self.known_feature)) #feature = values
 
-                if cfg.play_by != 'ADD' and cfg.play_by != 'ADD_valid':
+                if cfg.play_by != 'AOO' and cfg.play_by != 'AOO_valid':
                     self.known_feature_total.clear()
                     self.known_feature_total.append(self.known_feature_cluster)
                     self.known_feature_total.append(self.known_feature_type)
@@ -254,5 +255,64 @@ class agent():
                     self.recent_candidate_list_ranked = rank_items(self.known_feature_total, self.items, self.features,
                                                                    self.transE_model, self.recent_candidate_list,
                                                                    self.rejected_item_list_)
+        else:
+            if value is not None:
+                self.recent_candidate_list = [k for k in self.recent_candidate_list if set(value).issubset(set(cfg.item_dict[str(k)]['L2_Category_name']))]
+                self.recent_candidate_list = list(set(self.recent_candidate_list) - set([self.busi_id])) + [self.busi_id]
 
+                self.known_feature_category += [int(i) for i in value]
+                self.known_feature_category = list(set(self.known_feature_category))
+                self.known_facet.append(facet)
+
+                l = list(set(self.recent_candidate_list) - set([self.busi_id]))
+                random.shuffle(l)
+
+
+                if cfg.play_by != 'AOO' and cfg.play_by != 'AOO_valid':
+                    self.known_feature_total.clear()
+                    self.known_feature_total.append(self.known_feature_cluster)
+                    self.known_feature_total.append(self.known_feature_type)
+                    self.known_feature_total.append(self.known_feature_category)
+                    self.distance_dict = feature_distance(self.known_feature_total, self.user_id, self.TopKTaxo, self.features)
+                    self.distance_dict2 = self.distance_dict.copy()
+                    self.recent_candidate_list_ranked = rank_items(self.known_feature_total, self.items, self.features, self.transE_model, self.recent_candidate_list, self.rejected_item_list_)
+
+
+        start = time.time()
+        if value is not None and value[0] is not None:
+
+            c = cal_ent(self.recent_candidate_list)
+            d = c.do_job()
+            self.entropy_dict = d
+        '''
+        
+        '''
+        for f in self.asked_feature:
+            self.entropy_dict[f] = 0
+
+        for f in self.asked_feature:
+            if self.distance_dict is not None and f in self.distance_dict:
+                self.distance_dict[f] = 10000
+                if self.entropy_dict[f] == 0:
+                    self.distance_dict[f] = 10000
+
+        for f in self.asked_feature:
+            if self.distance_dict2 is not None and f in self.distance_dict:
+                self.distance_dict2[f] = 10000
+                if self.entropy_dict[f] == 0:
+                    self.distance_dict[f] = 10000
+
+        self.residual_feature_big = list(set(self.choose_pool) - set(self.known_facet))#在可选择的feature中 把已知的类别（用户已经选择的）删除，
+        ent_position, sim_position = None, None
+        if self.entropy_dict is not None:
+            ent_value = sorted([v for k, v in self.entropy_dict.items()], reverse=True)
+            ent_position = [ent_value.index(self.entropy_dict[big_f]) for big_f in self.residual_feature_big]
+
+        if self.distance_dict is not None:
+            sim_value = sorted([v for k, v in self.distance_dict.items()], reverse=True)
+            sim_position = [sim_value.index(self.distance_dict[str(big_f)]) for big_f in self.residual_feature_big]
+
+        if len(self.residual_feature_big) > 0:
+            with open(self.write_fp, 'a') as f:
+                f.write('Turn Count: {} residual feature: {}***ent position: {}*** sim position: {}***\n'.format(self.turn_count, self.residual_feature_big, ent_position, sim_position))
 
