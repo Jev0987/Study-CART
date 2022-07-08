@@ -12,6 +12,7 @@ from collections import defaultdict
 from config import global_config as cfg
 import random
 
+from conversationModule.message import message
 from util_entropy import cal_ent
 from util_fea_sim import feature_distance
 from util_sense import rank_items
@@ -223,6 +224,7 @@ class agent():
         value = input_message.data['value']
 
         if facet in ['cluster', 'POI_Type']:
+
             if value is not None and value[0] is not None:#value is in list
                 self.recent_candidate_list = [k for k in self.recent_candidate_list if cfg.item_dict[str(k)][facet] in value]
 
@@ -315,4 +317,151 @@ class agent():
         if len(self.residual_feature_big) > 0:
             with open(self.write_fp, 'a') as f:
                 f.write('Turn Count: {} residual feature: {}***ent position: {}*** sim position: {}***\n'.format(self.turn_count, self.residual_feature_big, ent_position, sim_position))
+
+    def prepare_next_question(self):
+        if self.strategy == 'maxent':
+            facet = max(self.entropy_dict, key=self.entropy_dict.get)
+            data = dict()
+            data['facet'] = facet
+            new_message = message(cfg.AGENT, cfg.USER, cfg.ASK_FACET, data)
+            self.asked_feature.append(facet)
+            return new_message
+        elif self.strategy == 'maxsim':
+            for f in self.asked_feature:
+                if self.distance_dict is not None and f in self.distance_dict:
+                    self.distance_dict[f] = 10000
+            if len(self.known_feature) == 0 or self.distance_dict is None:
+               facet = max(self.entropy_dict, key=self.entropy_dict.get)
+            else:
+               facet = max(self.distance_dict, key=self.distance_dict.get)
+            data = dict()
+            data['facet'] = facet
+            new_message = message(cfg.AGENT, cfg.USER, cfg.ASK_FACET, data)
+            self.asked_feature.append(facet)
+            return new_message
+        else:
+            pool = [item for item in cfg.FACET_POOL if item not in self.asked_feature]
+            facet = np.random.choice(np.array(pool), 1)[0]
+            data = dict()
+            if facet in [item.name for item in cfg.cat_tree.children]:
+                data['facet'] = facet
+            else:
+                data['facet'] = facet
+            new_message = message(cfg.AGENT, cfg.USER, cfg.ASK_FACET, data)
+            return new_message
+
+    def prepare_rec_message(self):
+        self.recent_candidate_list_ranked = [item for item in self.recent_candidate_list_ranked if item not in self.rejected_item_list_]  # Delete those has been rejected
+        rec_list = self.recent_candidate_list_ranked[: 10]
+        data = dict()
+        data['rec_list'] = rec_list
+        new_message = message(cfg.AGENT, cfg.USER, cfg.MAKE_REC, data)
+        return new_message
+
+    def response(self, input_message):
+
+        assert input_message.sender == cfg.USER
+        assert input_message.receiver == cfg.AGENT
+        #如果当前的属性是在已经挑选好的facet里，根据feature选择询问形式
+        if input_message.message_type == cfg.INFORM_FACET:
+            self.update_upon_feature_inform(input_message)
+        if input_message.message_type == cfg.REJECT_REC:
+            self.rejected_item_list_ += input_message.data['rejected_item_list']
+            self.rejected_time += 1
+            if self.mini == 1:
+                if self.alwaysupdate == 1:
+                    for i in range(cfg.update_count):
+                        self.mini_update_transE()
+                    self.mini_update_already = True
+                    self.recent_candidate_list = list(set(self.recent_candidate_list) - set(self.rejected_item_list_))
+                    self.recent_candidate_list = list(set(self.recent_candidate_list) - set([self.busi_id])) + [self.busi_id]
+                    self.recent_candidate_list_ranked = rank_items(self.known_feature_total, self.items, self.features, self.transE_model, self.recent_candidate_list, self.rejected_item_list_)
+
+        if input_message.message_type == cfg.INFORM_FACET:
+            if self.turn_count > 0:
+                if input_message.data['value'] is None:
+                    self.history_list.append(0)
+                else:
+                    self.history_list.append(1)
+
+        if input_message.message_type == cfg.REJECT_REC:
+            self.history_list.append(-1)
+            self.recent_candidate_list = list(set(self.recent_candidate_list) - set(self.rejected_item_list_))
+
+        if cfg.play_by != 'AOO' and cfg.play_by != 'AOO_valid':
+            if cfg.mod == 'ours':
+                state_vector = self.vectorize()
+
+        action = None
+        SoftMax = nn.Softmax(dim=-1)
+
+
+        if cfg.play_by == 'policy':
+            s = torch.from_numpy(state_vector).float()
+            s = Variable(s, requires_grad=True)
+            self.PN_model.eval()
+            pred = self.PN_model(s)
+            prob = SoftMax(pred)
+            c = Categorical(prob)
+
+            if cfg.eval == 1:
+                pred_data = pred.data.tolist()
+                sorted_index = sorted(range(len(pred_data)), key=lambda k: pred_data[k], reverse=True)
+
+
+                unasked_max = None
+                for item in sorted_index:
+                    if item < self.big_feature_length:
+                        if cfg.FACET_POOL[item] not in self.asked_feature:
+                            unasked_max = item
+                            break
+                    else:
+                        unasked_max = self.big_feature_length
+                        break
+                action = Variable(torch.IntTensor([unasked_max]))
+                print('action is: {}'.format(action))
+            else: # for RL
+                i = 0
+                action_ = self.big_feature_length
+                while(i < 10000):
+                   action_ = c.sample()
+                   i += 1
+                   if action_ <= self.big_feature_length:
+                       if action_ == self.big_feature_length:
+                           break
+                       elif cfg.FACET_POOL[action_] not in self.asked_feature:
+                           break
+                action = action_
+                print('action is: {}'.format(action))
+
+            log_prob = c.log_prob(action)
+            if self.turn_count != 0:
+                self.log_prob_list = torch.cat([self.log_prob_list, log_prob.reshape(1)])
+            else:
+                self.log_prob_list = log_prob.reshape(1)
+
+            if action < len(cfg.FACET_POOL):
+                data = dict()
+                data['facet'] = cfg.FACET_POOL[action]
+                new_message = message(cfg.AGENT, cfg.USER, cfg.ASK_FACET, data)
+            else:
+                new_message = self.prepare_rec_message()
+            self.action_tracker.append(action.data.numpy().tolist())
+            self.candidate_length_tracker.append(len(self.recent_candidate_list))
+
+
+        action = None
+        if new_message.message_type == cfg.ASK_FACET:
+            action = cfg.FACET_POOL.index(new_message.data['facet'])
+
+        if new_message.message_type == cfg.MAKE_REC:
+            action = len(cfg.FACET_POOL)
+
+        if cfg.purpose == 'pretrain':
+            self.numpy_list.append((action, state_vector))
+
+        with open(self.write_fp, 'a') as f:
+            f.write('Turn count: {}, candidate length: {}\n'.format(self.turn_count, len(self.recent_candidate_list)))
+        return new_message
+
 

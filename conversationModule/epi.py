@@ -142,12 +142,13 @@ def run_one_episode(transE_model, user_id, busi_id, MAX_TURN, do_random, write_f
                 the_agent.log_prob_list, rewards, success, int(the_agent.turn_count), the_agent.known_feature_category)
 
 def update_PN_model(model, log_prob_list, rewards, optimizer):
+    #policy network的更新策略
     model.train()
-
+    #torch.mul()矩阵点乘
     loss = torch.sum(torch.mul(log_prob_list, Variable(rewards)).mul(-1))
 
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    optimizer.zero_grad()#将参数梯度直接设置为0
+    loss.backward()#反向传播
+    optimizer.step()#对x值进行更新
 
 

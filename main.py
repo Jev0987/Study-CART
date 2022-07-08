@@ -12,8 +12,10 @@ import random
 from config import global_config as cfg
 from pn import PolicyNetwork
 import time
+import numpy as np
 
-from conversationModule.epi import run_one_episode
+from conversationModule.epi import run_one_episode, update_PN_model
+
 random.seed(1)
 
 the_max = 0
@@ -222,7 +224,7 @@ def main():
         if A.purpose not in ['pretrain', 'fmdata']:
             choose_pool = [random.choice(choose_pool)]
 
-        #！！训练！！
+        #！！训练！！ choose_pool里随机抽取了几个feature
         for c in choose_pool:
             start_facet = c
             with open(write_fp, 'a') as f:
@@ -233,3 +235,150 @@ def main():
                                                          A.strategy, A.TopKTaxo,
                                                          PN_model, gamma, A.trick, A.mini,
                                                          optimizer1_transE, optimizer2_transE, A.alwaysupdate, start_facet, A.mask, sample_dict, choose_pool_original,features, items)
+            else:
+                current_np = run_one_episode(current_transE_model, user_id, item_id, A.mt, False, write_fp,
+                                             A.strategy, A.TopKTaxo,
+                                             PN_model, gamma, A.trick, A.mini,
+                                             optimizer1_transE, optimizer2_transE, A.alwaysupdate, start_facet, A.mask,
+                                             sample_dict, choose_pool_original, features, items)
+                numpy_list += current_np
+
+        #check POI type, recommend location id by star, check the success.
+        if A.purpose != 'pretrain':
+            total_turn += turn_count
+
+        if A.purpose != 'pretrain':
+            if success == True:
+                if cfg.poi_dict[str(item_id)]['POI'] == 'Combined':
+                    combined_num += 1
+                    L2_Category_name_list = cfg.poi_dict[str(item_id)]['L2_Category_name']
+                    category_list = known_feature_category
+
+                    possible_L2_list = []
+                    #若有相同的category ，添加到temp_location，把地点放进possibleL2list里
+                    for i in range(len(L2_Category_name_list)):
+                        for j in range(len(category_list)):
+                            if L2_Category_name_list[i] == category_list[j]:
+                                temp_location = cfg.poi_dict[str(item_id)]['Location_id'][i]
+                                if temp_location not in possible_L2_list:
+                                    possible_L2_list.append(temp_location)
+                    location_list = []
+                    location_list = possible_L2_list
+                    random_location_list = location_list.copy()
+                    star_location_list = location_list.copy()
+                    if location_id not in location_list:
+                        #can test random selection
+                        random_location_list = np.random.choice(category_list, int(len(category_list)/2), replace=False)
+                        star_list = cfg.poi_dict[str(item_id)]['stars']
+                        location_list = cfg.poi_dict[str(item_id)]['Location_id']
+                        prob_star_list = [float(i)/sum(star_list) for i in star_list]
+                        if len(location_list) > 5:
+                            random_location_list = np.random.choice(location_list, int(len(location_list)/2), p=prob_star_list, replace = False)
+                        else:
+                            random_location_list = location_list
+                        star_list = cfg.poi_dict[str(item_id)]['stars']
+
+                        star_list = [b[0] for b in sorted(enumerate(star_list),key=lambda i:i[1])]
+                        print(star_list)
+                        location_stars = star_list[:3]
+                        for index in location_stars:
+                            l = cfg.poi_dict[str(item_id)]['Location_id'][index]
+                            star_location_list.append(l)
+                    print('star_location_list: ', star_location_list)
+                    print('random_location_list', random_location_list)
+                    if location_id in random_location_list:
+                        print('Random Combined Rec Success! in episode: {}.'.format(epi_count))
+                        success_at_turn_list_location_random[turn_count] += 1
+                    else:
+                        print('Random Combined Rec failed! in episode: {}.'.format(epi_count))
+
+                    if location_id in star_location_list:
+                        print('Random Combined Rec Success! in episode: {}.'.format(epi_count))
+                        success_at_turn_list_location_rate[turn_count] += 1
+                    else:
+                        print('Random Combined Rec failed! in episode: {}.'.format(epi_count))
+                else:
+                    print('Independent Rec Success! in episode: {}.'.format(epi_count))
+                    success_at_turn_list_location_random[turn_count] += 1
+                    success_at_turn_list_location_rate[turn_count] += 1
+
+        if A.purpose != 'pretrain':
+            if success == True:
+                print('Rec Success! in episode: {}.'.format(epi_count))
+                success_at_turn_list_item[turn_count] += 1
+        #
+        print('total combined: ', combined_num)
+        # update PN model
+        if A.playby == 'policy' and A.eval != 1 and A.purpose != 'pretrain':
+            update_PN_model(PN_model, log_prob_list, rewards, optimizer)
+            print('updated PN model')
+            current_length = len(log_prob_list)
+            conversation_length_list.append(current_length)
+        # end update
+
+        check_span = 10
+        if epi_count % check_span == 0 and epi_count >= 3 * check_span and cfg.eval != 1 and A.purpose != 'pretrain':
+            PATH = './data/PN-model-{}/v4-code-{}-s-{}-e-{}-lr-{}-gamma-{}-playby-{}-stra-{}-topK-{}-trick-{}-eval-{}-init-{}-mini-{}-always-{}-upcount-{}-upreg-{}-m-{}-epi-{}.txt'.format(
+                A.mod.lower(), A.code, A.startFrom, A.endAt, A.lr, A.gamma, A.playby, A.strategy, A.TopKTaxo,
+                A.trick,
+                A.eval, A.initeval,
+                A.mini, A.alwaysupdate, A.upcount, A.upreg, A.mask, epi_count)
+            torch.save(PN_model.state_dict(), PATH)
+            print('Model saved at {}'.format(PATH))
+
+            a1 = conversation_length_list[epi_count - 3 * check_span: epi_count - 2 * check_span]
+            a2 = conversation_length_list[epi_count - 2 * check_span: epi_count - 1 * check_span]
+            a3 = conversation_length_list[epi_count - 1 * check_span:]
+            a1 = np.mean(np.array(a1))
+            a2 = np.mean(np.array(a2))
+            a3 = np.mean(np.array(a3))
+
+            with open(write_fp, 'a') as f:
+                f.write('$$$current turn: {}, a3: {}, a2: {}, a1: {}\n'.format(epi_count, a3, a2, a1))
+            print('current turn: {}, a3: {}, a2: {}, a1: {}'.format(epi_count, a3, a2, a1))
+
+            num_interval = int(epi_count / check_span)
+            for i in range(num_interval):
+                ave = np.mean(np.array(conversation_length_list[i * check_span: (i + 1) * check_span]))
+                print('start: {}, end: {}, average: {}'.format(i * check_span, (i + 1) * check_span, ave))
+                PATH = './data/PN-model-{}/v4-code-{}-s-{}-e-{}-lr-{}-gamma-{}-playby-{}-stra-{}-topK-{}-trick-{}-eval-{}-init-{}-mini-{}-always-{}-upcount-{}-upreg-{}-m-{}-epi-{}.txt'.format(
+                    A.mod.lower(), A.code, A.startFrom, A.endAt, A.lr, A.gamma, A.playby, A.strategy, A.TopKTaxo,
+                    A.trick,
+                    A.eval, A.initeval,
+                    A.mini, A.alwaysupdate, A.upcount, A.upreg, A.mask, (i + 1) * check_span)
+                print('Model saved at: {}'.format(PATH))
+
+            if a3 > a1 and a3 > a2:
+                print('Early stop of RL!')
+                exit()
+
+        # write control information
+        if A.purpose != 'pretrain':
+            with open(write_fp, 'a') as f:
+                f.write('Big features are: {}\n'.format(choose_pool))
+                if rewards is not None:
+                    f.write('reward is: {}\n'.format(rewards.data.numpy().tolist()))
+                f.write('WHOLE PROCESS TAKES: {} SECONDS\n'.format(time.time() - start))
+        # end write
+
+        # Write to pretrain numpy which is the pretrain data.
+        if A.purpose == 'pretrain':
+            if len(numpy_list) > 5000:
+                with open('./data/pretrain-numpy-data-{}/segment-{}-start-{}-end-{}.pk'.format(
+                        A.mod, NUMPY_COUNT, A.startFrom, A.endAt), 'wb') as f:
+                    pickle.dump(numpy_list, f)
+                    print('Have written 5000 numpy arrays!')
+                NUMPY_COUNT += 1
+                numpy_list = list()
+        # end write
+
+    print('\nLocation result:')
+    sum_sr = 0.0
+    for i in range(len(success_at_turn_list_location_rate)):
+        success_rate = success_at_turn_list_location_rate[i] / A.endAt
+        sum_sr += success_rate
+        print('success rate is {} at turn {}, accumulated sum is {}'.format(success_rate, i + 1, sum_sr))
+    print('Average turn is: ', total_turn / A.endAt + 1)
+
+if __name__ == '__main__':
+        main()

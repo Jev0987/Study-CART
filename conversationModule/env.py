@@ -63,10 +63,11 @@ class user():
         assert input_message.receiver == cfg.USER
 
         new_message = None
+        #是否继续询问
         if input_message.message_type == cfg.EPISODE_START or input_message.message_type == cfg.ASK_FACET:
             facet = input_message.data['facet']
             new_message = self.inform_facet(facet)
-
+        #可以推荐
         if input_message.message_type == cfg.MAKE_REC:
             if str(self.busi_id) in input_message.data['rec_list']:
                 data = dict()
